@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: work-iq-a2a-foundry
+metadata:
+  template: work-iq-a2a-foundry@1.0.0
+
+infra:
+  provider: bicep
+  path: infra
+  module: main
+
+hooks:
+  # Creates the Microsoft Entra OAuth client, the RemoteA2A connection to Work IQ,
+  # and registers the connection's redirect URI on the app.
+  postprovision:
+    posix:
+      shell: sh
+      continueOnError: false
+      interactive: true
+      run: uv run scripts/setup_work_iq_connection.py
+    windows:
+      shell: pwsh
+      continueOnError: false
+      interactive: true
+      run: uv run scripts/setup_work_iq_connection.py
+
+  # Deletes the Entra application registration that provisioning created.
+  predown:
+    posix:
+      shell: sh
+      continueOnError: true
+      interactive: true
+      run: uv run scripts/teardown_work_iq_connection.py
+    windows:
+      shell: pwsh
+      continueOnError: true
+      interactive: true
+      run: uv run scripts/teardown_work_iq_connection.py
