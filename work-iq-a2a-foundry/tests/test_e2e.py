@@ -9,7 +9,7 @@ It requires:
 * ``azd up`` to have completed in this directory (or the equivalent variables set),
 * an Azure sign-in (``az login``) as a user who has completed the Work IQ OAuth
   consent flow at least once for this connection,
-* that user to hold a Microsoft 365 Copilot license.
+* that user to be assigned to the tenant's usage-based billing plan for Work IQ.
 
 The test asserts the full path: the coordinator agent invokes the A2A tool, the
 request is authenticated through the OAuth connection, and Work IQ returns text.

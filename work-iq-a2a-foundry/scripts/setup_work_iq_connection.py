@@ -38,6 +38,13 @@ WORK_IQ_SCOPE_ID = "0b1715fd-f4bf-4c63-b16d-5be31f9847c2"
 WORK_IQ_A2A_ENDPOINT = "https://workiq.svc.cloud.microsoft/a2a/"
 WORK_IQ_SCOPE = "api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask"
 
+# Microsoft Graph, and its 'offline_access' delegated permission. Entra only issues a
+# refresh token when 'offline_access' is requested, and without one the connection stops
+# working as soon as the first access token expires and asks the user to consent again.
+GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
+OFFLINE_ACCESS_SCOPE_ID = "7427e0e9-2fba-42fe-b0c0-848c9e6a8182"
+OFFLINE_ACCESS_SCOPE = "offline_access"
+
 CONNECTIONS_API_VERSION = "2026-03-15-preview"
 SECRET_DISPLAY_NAME = "foundry-a2a"
 
@@ -179,7 +186,7 @@ def wait_for_app_replication(app_id: str, timeout_seconds: int = 180) -> None:
 
 
 def ensure_work_iq_permission(app_id: str) -> None:
-    """Add the WorkIQAgent.Ask delegated permission and grant admin consent."""
+    """Add the delegated permissions the connection needs and grant admin consent."""
     log("Adding the WorkIQAgent.Ask delegated permission...")
     run(
         [
@@ -194,6 +201,24 @@ def ensure_work_iq_permission(app_id: str) -> None:
             WORK_IQ_APP_ID,
             "--api-permissions",
             f"{WORK_IQ_SCOPE_ID}=Scope",
+        ],
+        check=False,
+    )
+
+    log("Adding the offline_access delegated permission...")
+    run(
+        [
+            "az",
+            "ad",
+            "app",
+            "permission",
+            "add",
+            "--id",
+            app_id,
+            "--api",
+            GRAPH_APP_ID,
+            "--api-permissions",
+            f"{OFFLINE_ACCESS_SCOPE_ID}=Scope",
         ],
         check=False,
     )
@@ -286,7 +311,9 @@ def put_connection(resource_id: str, tenant_id: str, client_id: str, client_secr
             "AuthorizationUrl": f"{authority}/authorize",
             "TokenUrl": f"{authority}/token",
             "RefreshUrl": f"{authority}/token",
-            "Scopes": [WORK_IQ_SCOPE],
+            # 'offline_access' is what makes Entra return a refresh token. Without it the
+            # connection stops working once the first access token expires.
+            "Scopes": [WORK_IQ_SCOPE, OFFLINE_ACCESS_SCOPE],
             "Credentials": {"ClientId": client_id, "ClientSecret": client_secret},
             "metadata": {"ApiType": "Azure"},
         }

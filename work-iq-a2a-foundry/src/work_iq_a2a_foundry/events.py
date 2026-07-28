@@ -234,8 +234,10 @@ def describe_failure(message: str) -> str:
             "Foundry project. 'azd provision' creates it for you."
         ),
         "403": (
-            "Work IQ returned 403. The signed-in user most likely lacks a Microsoft 365 "
-            "Copilot license, or admin consent for WorkIQAgent.Ask was never granted."
+            "Work IQ returned 403. The most likely causes are that the tenant has no "
+            "usage-based billing plan for Work IQ, that the signed-in user is not assigned "
+            "to that plan, or that admin consent for WorkIQAgent.Ask was never granted. See "
+            "https://learn.microsoft.com/microsoft-365/copilot/extensibility/work-iq/enable-work-iq"
         ),
     }
     lowered = message.lower()

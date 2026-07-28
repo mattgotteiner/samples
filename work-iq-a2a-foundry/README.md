@@ -121,10 +121,17 @@ Elsewhere the sample stays on SDK types: `agents.create_version()` is typed as
 
 **Microsoft 365**
 
-- The user who signs in must have a **Microsoft 365 Copilot license**. Work IQ returns `403` without one.
-- Work IQ is in public preview. See the
-  [Work IQ documentation](https://learn.microsoft.com/microsoft-365/copilot/extensibility/work-iq/)
-  for current availability.
+- **Work IQ API access does not require a Microsoft 365 Copilot license.** Access is billed on
+  usage instead, so your tenant needs a
+  [usage-based billing plan](https://learn.microsoft.com/microsoft-365/copilot/usage-based-billing-overview-copilot-credits)
+  set up in Copilot Studio (with an Azure subscription and resource group assigned), and the
+  signing-in user must be assigned to that plan.
+  Copilot-licensed users are also billed on usage when calling custom agents such as this sample.
+- The Work IQ service principal must exist in the tenant. `azd provision` creates it for you
+  (`az ad sp create --id fdcc1f02-fc51-4226-8753-f668596af7f7`), which needs a Global Administrator
+  the first time it runs in a tenant.
+- See [Enable your tenant for Work IQ](https://learn.microsoft.com/microsoft-365/copilot/extensibility/work-iq/enable-work-iq)
+  for the authoritative prerequisites.
 
 ## Quickstart
 
@@ -213,7 +220,8 @@ az ad app list --display-name "work-iq-a2a-foundry-<your-env-name>" -o table
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Sample exits with code `2` and prints a URL | No delegated Work IQ token stored yet | Open the URL as the target user, consent, run again |
-| `403` from Work IQ, no scope message | Signed-in user has no Microsoft 365 Copilot license | Assign the license, wait 15–30 minutes for propagation |
+| Consent is requested again about an hour after it succeeded | The connection has no refresh token, because `offline_access` was not among its scopes | Re-run `azd provision` to update the connection, then consent once more |
+| `403` from Work IQ, no scope message | Usage-based billing is not enabled for the tenant, or the signing-in user is not assigned to the billing plan | See [Enable your tenant for Work IQ](https://learn.microsoft.com/microsoft-365/copilot/extensibility/work-iq/enable-work-iq) |
 | `Unsupported A2A modality. Only text modality is supported.` | Older SDK sent non-text A2A parts | `uv lock --upgrade-package azure-ai-projects` |
 | Admin consent step fails during `azd up` | You lack Cloud Application Administrator | See [Splitting the admin step](#splitting-the-admin-step) |
 | `Tenant provided in token does not match` | Signed in to the wrong tenant | `az login --tenant <project-tenant-id>`, set `AZURE_TENANT_ID` |
@@ -244,6 +252,10 @@ Then re-run `azd provision`. The script is idempotent and picks up where it left
 
 - The setup script creates a **client secret** for the Entra app. `azd` stores it in the local
   `.azure/` directory, which is git-ignored. Treat it as sensitive and run `azd down` when done.
+- The connection requests `offline_access` alongside `WorkIQAgent.Ask`. Entra only returns a
+  refresh token when `offline_access` is requested, and without one the connection stops working
+  as soon as the first access token expires and asks the user to sign in again. Consent therefore
+  covers "maintain access to data you have given it access to".
 - The connection is created with `isSharedToAll`, so any user of the project can use it — but each
   user signs in separately and only ever sees their own Microsoft 365 data.
 - This is sample code for learning and evaluation, not a production-hardened deployment.
