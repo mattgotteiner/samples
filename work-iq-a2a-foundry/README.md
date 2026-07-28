@@ -63,6 +63,39 @@ The key idea is **token ownership**. Your code never handles a Work IQ token. Fo
 OAuth exchange and token refresh for the connection, and passes the signed-in user's delegated
 token to Work IQ on every call.
 
+### Reading the response stream
+
+Foundry agents stream over the **OpenAI Responses API**, so the sample works with typed SDK
+models rather than raw dictionaries. `AIProjectClient.get_openai_client()` returns an `OpenAI`
+client, and `responses.create(stream=True)` yields typed events that
+[`events.py`](src/work_iq_a2a_foundry/events.py) dispatches on directly:
+
+| Typed event | Sample behaviour |
+| --- | --- |
+| `ResponseTextDeltaEvent` | Append `.delta` to the answer and echo it |
+| `ResponseOutputItemAddedEvent` / `...DoneEvent` | Detect the call out to Work IQ |
+| `ResponseCompletedEvent` | Finish the run |
+| `ResponseFailedEvent` / `ResponseErrorEvent` / `ResponseIncompleteEvent` | Extract a typed error message |
+
+On a representative run, 95 of 100 stream events were handled through these classes and the
+remaining 5 were also typed SDK events the sample simply does not need to branch on.
+
+Two things have no SDK model yet, and are the only places the sample reads untyped data:
+
+- **The A2A tool-call item.** The typed `ResponseOutputItemAddedEvent` envelope carries an item
+  whose `type` is `a2a_preview_call`, which the OpenAI SDK does not model. The sample compares
+  that one string against a named constant rather than inventing a local model.
+- **The OAuth sign-in payload** Foundry emits when a connection has no delegated token yet.
+
+Elsewhere the sample stays on SDK types: `agents.create_version()` is typed as
+`AgentVersionDetails`, and credentials are typed as `azure.core.credentials.TokenCredential`.
+
+> **Why the connection is created with `az rest`.** `ConnectionsOperations` in
+> `azure-ai-projects` is read-only — it exposes `get`, `get_default`, and `list`, but no create.
+> Creating the `RemoteA2A` connection therefore goes through the ARM control plane in
+> [`setup_work_iq_connection.py`](scripts/setup_work_iq_connection.py). Everything the sample
+> does at runtime uses the SDK.
+
 ## Prerequisites
 
 **Tooling**

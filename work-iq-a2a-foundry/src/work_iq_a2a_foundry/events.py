@@ -1,5 +1,15 @@
 """Pure helpers for interpreting the Foundry response stream.
 
+Foundry agents stream over the OpenAI Responses API, so most of the stream is already
+modelled by typed classes in the ``openai`` package and this module dispatches on those
+types rather than re-parsing raw dictionaries.
+
+Two things are *not* covered by any SDK today, and are the only places this module falls
+back to untyped access:
+
+* the A2A tool-call output item, which is a Foundry preview extension, and
+* the OAuth sign-in payload Foundry emits when a connection has no delegated token yet.
+
 These functions perform no network or Azure I/O, so they can be unit tested offline.
 """
 
@@ -9,6 +19,16 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseErrorEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+    ResponseTextDeltaEvent,
+)
 
 CONSENT_PREFIX = "OAuth consent required. Please visit: "
 
@@ -107,12 +127,29 @@ def find_consent_url(payload: Any) -> str | None:
     return None
 
 
-def classify_event(event_type: str, payload: dict[str, Any]) -> str:
-    """Map a raw stream event onto a small, stable vocabulary.
+def classify_event(event: Any, payload: dict[str, Any] | None = None) -> str:
+    """Map a stream event onto a small, stable vocabulary.
+
+    Dispatches on the typed OpenAI Responses events where they exist, and only falls
+    back to the serialized payload for the Foundry preview items the SDK does not model.
 
     Returns one of ``text_delta``, ``a2a_call``, ``consent_required``, ``completed``,
     ``failed``, or ``other``.
     """
+    if isinstance(event, ResponseTextDeltaEvent):
+        return "text_delta"
+    if isinstance(event, (ResponseFailedEvent, ResponseErrorEvent, ResponseIncompleteEvent)):
+        return "failed"
+    if isinstance(event, ResponseCompletedEvent):
+        return "completed"
+    if isinstance(event, (ResponseOutputItemAddedEvent, ResponseOutputItemDoneEvent)):
+        item_type = str(getattr(getattr(event, "item", None), "type", "") or "")
+        if item_type in A2A_CALL_ITEM_TYPES:
+            return "a2a_call"
+
+    # Foundry preview events. The SDK may deliver these as unmodelled objects, so the
+    # event type string and serialized payload are the only reliable signals.
+    event_type = str(getattr(event, "type", "") or "")
     if event_type == "response.output_text.delta":
         return "text_delta"
     if event_type in {"response.failed", "response.error", "error"}:
@@ -121,19 +158,52 @@ def classify_event(event_type: str, payload: dict[str, Any]) -> str:
         return "completed"
     if "oauth" in event_type or "consent" in event_type:
         return "consent_required"
-    if event_type in {"response.output_item.added", "response.output_item.done"}:
+    if event_type in {"response.output_item.added", "response.output_item.done"} and payload:
         item = payload.get("item")
         if isinstance(item, dict) and item.get("type") in A2A_CALL_ITEM_TYPES:
             return "a2a_call"
     return "other"
 
 
-def remote_tool_name(payload: dict[str, Any]) -> str | None:
+def text_delta(event: Any) -> str:
+    """Return the incremental assistant text carried by a text-delta event."""
+    return str(getattr(event, "delta", "") or "")
+
+
+def error_message(event: Any, payload: dict[str, Any] | None = None) -> str:
+    """Extract a human-readable error from a failure event.
+
+    ``ResponseFailedEvent`` carries a typed ``response.error`` and ``ResponseErrorEvent``
+    carries a typed ``message``; the payload is only consulted for preview events.
+    """
+    if isinstance(event, ResponseFailedEvent):
+        error = getattr(getattr(event, "response", None), "error", None)
+        message = getattr(error, "message", None)
+        if isinstance(message, str) and message:
+            return message
+    if isinstance(event, ResponseErrorEvent):
+        message = getattr(event, "message", None)
+        if isinstance(message, str) and message:
+            return message
+    if isinstance(event, ResponseIncompleteEvent):
+        details = getattr(getattr(event, "response", None), "incomplete_details", None)
+        reason = getattr(details, "reason", None)
+        if isinstance(reason, str) and reason:
+            return f"The response ended early: {reason}"
+    return _error_message_from_payload(payload or {})
+
+
+def remote_tool_name(event: Any, payload: dict[str, Any] | None = None) -> str | None:
     """Return the remote tool or connection name from an A2A call event, if present."""
-    item = payload.get("item")
-    if isinstance(item, dict):
+    item = getattr(event, "item", None)
+    for key in ("name", "label", "connection_name"):
+        value = getattr(item, key, None)
+        if isinstance(value, str) and value:
+            return value
+    raw_item = (payload or {}).get("item")
+    if isinstance(raw_item, dict):
         for key in ("name", "label", "connection_name"):
-            value = item.get(key)
+            value = raw_item.get(key)
             if isinstance(value, str) and value:
                 return value
     return None
@@ -184,6 +254,21 @@ def append_event_log(log_path: Path | None, index: int, event_type: str, payload
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, ensure_ascii=True))
         handle.write("\n")
+
+
+def _error_message_from_payload(payload: dict[str, Any]) -> str:
+    for key in ("error", "message", "detail"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict):
+            nested = value.get("message") or value.get("detail")
+            if isinstance(nested, str) and nested:
+                return nested
+    response = payload.get("response")
+    if isinstance(response, dict):
+        return _error_message_from_payload(response)
+    return "The response stream reported a failure without a message."
 
 
 def _json_safe(value: Any) -> Any:

@@ -7,8 +7,10 @@ from types import TracebackType
 from typing import Any
 
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import A2APreviewTool, PromptAgentDefinition
+from azure.ai.projects.models import A2APreviewTool, AgentVersionDetails, PromptAgentDefinition
+from azure.core.credentials import TokenCredential
 from azure.identity import AzureCliCredential, ChainedTokenCredential, DefaultAzureCredential
+from openai import OpenAI
 
 from work_iq_a2a_foundry.config import Settings
 from work_iq_a2a_foundry.events import (
@@ -16,9 +18,11 @@ from work_iq_a2a_foundry.events import (
     append_event_log,
     classify_event,
     describe_failure,
+    error_message,
     event_to_dict,
     find_consent_url,
     remote_tool_name,
+    text_delta,
 )
 
 
@@ -65,7 +69,7 @@ class WorkIqFoundryAgent:
         ...     print(result.answer_text)
     """
 
-    def __init__(self, settings: Settings, *, credential: Any = None) -> None:
+    def __init__(self, settings: Settings, *, credential: TokenCredential | None = None) -> None:
         self.settings = settings
         self._credential = credential or build_credential(settings)
         self._project = AIProjectClient(
@@ -73,8 +77,8 @@ class WorkIqFoundryAgent:
             credential=self._credential,
             allow_preview=True,
         )
-        self._openai: Any = None
-        self._agent: Any = None
+        self._openai: OpenAI | None = None
+        self._agent: AgentVersionDetails | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -90,7 +94,7 @@ class WorkIqFoundryAgent:
     ) -> None:
         self.close()
 
-    def create_agent(self) -> Any:
+    def create_agent(self) -> AgentVersionDetails:
         """Resolve the A2A connection and create a temporary agent version."""
         connection = self._project.connections.get(self.settings.connection_name)
         tool = A2APreviewTool(project_connection_id=connection.id)
@@ -106,11 +110,11 @@ class WorkIqFoundryAgent:
 
     def close(self) -> None:
         """Delete the temporary agent version and release clients."""
-        if self._openai is not None and hasattr(self._openai, "close"):
+        if self._openai is not None:
             self._openai.close()
             self._openai = None
         if self._agent is not None and not self.settings.keep_agent_version:
-            version = getattr(self._agent, "version", None)
+            version = self._agent.version
             try:
                 if version is not None:
                     self._project.agents.delete_version(
@@ -130,7 +134,7 @@ class WorkIqFoundryAgent:
     @property
     def agent_version(self) -> str | None:
         """Version string of the temporary agent, once created."""
-        return None if self._agent is None else str(getattr(self._agent, "version", "") or "") or None
+        return None if self._agent is None else str(self._agent.version or "") or None
 
     def ask(self, prompt: str | None = None, *, echo: bool = True) -> AgentRunResult:
         """Ask the coordinator agent a question and stream the response.
@@ -172,15 +176,15 @@ class WorkIqFoundryAgent:
                 append_event_log(self.settings.event_log_path, index, event_type, payload)
                 result.event_count = index + 1
 
-                kind = classify_event(event_type, payload)
+                kind = classify_event(event, payload)
                 if kind == "text_delta":
-                    delta = str(getattr(event, "delta", "") or "")
+                    delta = text_delta(event)
                     chunks.append(delta)
                     if echo:
                         print(delta, end="", flush=True)
                 elif kind == "a2a_call":
                     result.called_remote_agent = True
-                    name = remote_tool_name(payload) or self.settings.connection_name
+                    name = remote_tool_name(event, payload) or self.settings.connection_name
                     if name not in result.tool_names:
                         result.tool_names.append(name)
                     if echo:
@@ -192,7 +196,7 @@ class WorkIqFoundryAgent:
                         if echo:
                             print(f"\n[oauth] sign-in required: {url}")
                 elif kind == "failed":
-                    result.error = describe_failure(_error_message(payload))
+                    result.error = describe_failure(error_message(event, payload))
 
                 # Some consent prompts arrive on events that are not typed as OAuth.
                 if result.consent_url is None:
@@ -208,18 +212,3 @@ class WorkIqFoundryAgent:
         if echo and result.answer_text and not result.answer_text.endswith("\n"):
             print()
         return result
-
-
-def _error_message(payload: dict[str, Any]) -> str:
-    for key in ("error", "message", "detail"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-        if isinstance(value, dict):
-            nested = value.get("message") or value.get("detail")
-            if isinstance(nested, str) and nested:
-                return nested
-    response = payload.get("response")
-    if isinstance(response, dict):
-        return _error_message(response)
-    return "The response stream reported a failure without a message."

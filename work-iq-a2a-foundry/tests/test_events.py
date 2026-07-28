@@ -4,8 +4,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseErrorEvent,
+    ResponseFailedEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+    ResponseTextDeltaEvent,
+)
 
 from work_iq_a2a_foundry.events import (
     CONSENT_PREFIX,
@@ -13,10 +22,12 @@ from work_iq_a2a_foundry.events import (
     append_event_log,
     classify_event,
     describe_failure,
+    error_message,
     event_to_dict,
     find_consent_url,
     remote_tool_name,
     strip_consent_prefix,
+    text_delta,
 )
 
 CONSENT_URL = "https://login.example.com/consent?state=abc"
@@ -69,6 +80,38 @@ def test_find_consent_url_ignores_unrelated_urls() -> None:
     assert find_consent_url({"count": 3, "items": []}) is None
 
 
+class _RawEvent:
+    """Stands in for a preview stream event the SDK does not model as a typed class."""
+
+    def __init__(self, event_type: str, item: dict | None = None) -> None:
+        self.type = event_type
+        if item is not None:
+            self.item = item
+
+
+@pytest.mark.parametrize(
+    ("event", "payload", "expected"),
+    [
+        (ResponseTextDeltaEvent.model_construct(delta="hi"), {}, "text_delta"),
+        (ResponseCompletedEvent.model_construct(), {}, "completed"),
+        (ResponseFailedEvent.model_construct(), {}, "failed"),
+        (ResponseErrorEvent.model_construct(message="boom"), {}, "failed"),
+        (
+            ResponseOutputItemAddedEvent.model_construct(item=SimpleNamespace(type="a2a_preview_call")),
+            {},
+            "a2a_call",
+        ),
+        (
+            ResponseOutputItemDoneEvent.model_construct(item=SimpleNamespace(type="message")),
+            {},
+            "other",
+        ),
+    ],
+)
+def test_classify_event_uses_typed_sdk_events(event: object, payload: dict, expected: str) -> None:
+    assert classify_event(event, payload) == expected
+
+
 @pytest.mark.parametrize(
     ("event_type", "payload", "expected"),
     [
@@ -82,15 +125,38 @@ def test_find_consent_url_ignores_unrelated_urls() -> None:
         ("keepalive", {}, "other"),
     ],
 )
-def test_classify_event(event_type: str, payload: dict, expected: str) -> None:
-    assert classify_event(event_type, payload) == expected
+def test_classify_event_falls_back_for_preview_events(event_type: str, payload: dict, expected: str) -> None:
+    assert classify_event(_RawEvent(event_type), payload) == expected
+
+
+def test_text_delta_reads_the_typed_field() -> None:
+    assert text_delta(ResponseTextDeltaEvent.model_construct(delta="chunk")) == "chunk"
+    assert text_delta(_RawEvent("keepalive")) == ""
+
+
+def test_error_message_prefers_typed_fields() -> None:
+    typed = ResponseErrorEvent.model_construct(message="typed failure")
+    assert error_message(typed, {"error": "ignored"}) == "typed failure"
+
+    failed = ResponseFailedEvent.model_construct(
+        response=SimpleNamespace(error=SimpleNamespace(message="response failed"))
+    )
+    assert error_message(failed, {}) == "response failed"
+
+    assert error_message(_RawEvent("error"), {"error": {"message": "raw"}}) == "raw"
+    assert "without a message" in error_message(_RawEvent("error"), {})
 
 
 def test_remote_tool_name() -> None:
-    assert remote_tool_name({"item": {"name": "work-iq-a2a"}}) == "work-iq-a2a"
-    assert remote_tool_name({"item": {"label": "work-iq"}}) == "work-iq"
-    assert remote_tool_name({"item": {}}) is None
-    assert remote_tool_name({}) is None
+    typed = ResponseOutputItemAddedEvent.model_construct(
+        item=SimpleNamespace(type="a2a_preview_call", name="work-iq-a2a")
+    )
+    assert remote_tool_name(typed, {}) == "work-iq-a2a"
+
+    assert remote_tool_name(_RawEvent("x"), {"item": {"name": "work-iq-a2a"}}) == "work-iq-a2a"
+    assert remote_tool_name(_RawEvent("x"), {"item": {"label": "work-iq"}}) == "work-iq"
+    assert remote_tool_name(_RawEvent("x"), {"item": {}}) is None
+    assert remote_tool_name(_RawEvent("x"), {}) is None
 
 
 def test_describe_failure_adds_guidance_for_known_errors() -> None:
