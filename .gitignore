@@ -1,0 +1,32 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Azure Developer CLI
+.azure/
+
+# Environment files (never commit real values)
+.env
+.env.*
+!.env.example
+
+# Local run output
+*.log
+*.jsonl
+out/
+dist/
+build/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
