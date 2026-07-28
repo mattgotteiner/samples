@@ -8,6 +8,7 @@ directory, and follow its README.
 
 | Sample | Language | What it shows |
 | --- | --- | --- |
+| [`work-iq-a2a-foundry`](./work-iq-a2a-foundry) | Python | Call the **Microsoft Work IQ** agent from an **Azure AI Foundry** agent over the **Agent2Agent (A2A)** protocol, using OAuth identity passthrough so answers are grounded in the signed-in user's own Microsoft 365 data. Includes an `azd` template, an end-to-end test, and a scripted Microsoft Entra setup. |
 
 ## Repository conventions
 
