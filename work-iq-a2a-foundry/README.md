@@ -220,7 +220,6 @@ az ad app list --display-name "work-iq-a2a-foundry-<your-env-name>" -o table
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Sample exits with code `2` and prints a URL | No delegated Work IQ token stored yet | Open the URL as the target user, consent, run again |
-| Consent is requested again about an hour after it succeeded | The connection has no refresh token, because `offline_access` was not among its scopes | Re-run `azd provision` to update the connection, then consent once more |
 | `403` from Work IQ, no scope message | Usage-based billing is not enabled for the tenant, or the signing-in user is not assigned to the billing plan | See [Enable your tenant for Work IQ](https://learn.microsoft.com/microsoft-365/copilot/extensibility/work-iq/enable-work-iq) |
 | `Unsupported A2A modality. Only text modality is supported.` | Older SDK sent non-text A2A parts | `uv lock --upgrade-package azure-ai-projects` |
 | Admin consent step fails during `azd up` | You lack Cloud Application Administrator | See [Splitting the admin step](#splitting-the-admin-step) |
@@ -252,10 +251,6 @@ Then re-run `azd provision`. The script is idempotent and picks up where it left
 
 - The setup script creates a **client secret** for the Entra app. `azd` stores it in the local
   `.azure/` directory, which is git-ignored. Treat it as sensitive and run `azd down` when done.
-- The connection requests `offline_access` alongside `WorkIQAgent.Ask`. Entra only returns a
-  refresh token when `offline_access` is requested, and without one the connection stops working
-  as soon as the first access token expires and asks the user to sign in again. Consent therefore
-  covers "maintain access to data you have given it access to".
 - The connection is created with `isSharedToAll`, so any user of the project can use it — but each
   user signs in separately and only ever sees their own Microsoft 365 data.
 - This is sample code for learning and evaluation, not a production-hardened deployment.
